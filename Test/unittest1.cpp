@@ -13,19 +13,30 @@ using namespace ModernHook;
 
 namespace Test
 {
+	int __stdcall Add(int a, int b)
+	{
+		return a + b;
+	}
+
 	TEST_CLASS(TestInlineHook)
 	{
 	private:
-		static int WINAPI MyMessageBoxW(HWND hWnd, LPCWSTR lpText, LPCWSTR lpCaption, UINT uType)
+		static int __stdcall MyAdd(int a, int b)
 		{
-			return -1;
+			return a - b;
 		}
 
 	public:
 		TEST_METHOD(Hook)
 		{
-			InlineHook messageBoxWHook(MessageBoxW, MyMessageBoxW);
-			Assert::AreEqual(-1, MessageBoxW(NULL, L"", L"", MB_OK));
+			InlineHook<decltype(Add)> messageBoxWHook(Add, MyAdd);
+			Assert::AreEqual(0, Add(1, 1));
+		}
+
+		TEST_METHOD(CallOriginalFunction)
+		{
+			InlineHook<decltype(Add)> messageBoxWHook(Add, MyAdd);
+			Assert::AreEqual(2, messageBoxWHook.CallOriginalFunction(1, 1));
 		}
 	};
 }
