@@ -1,14 +1,20 @@
 ﻿#pragma once
 
 #include <array>
+#include <memory.h>
 
 #include <Windows.h>
 
 namespace ModernHook
 {
 
-// Support calling conventions
+// Utils
 
+void** FindImportAddress(HANDLE hookModule, LPCSTR moduleName, LPCSTR functionName);
+
+
+// Support different calling conventions
+#pragma region calling conventions macros
 #define DEF_CDECL(FUNC, OPT1, OPT2, OPT3) \
 	FUNC(__cdecl, OPT1, OPT2, OPT3)
 #ifdef _M_CEE
@@ -46,8 +52,10 @@ namespace ModernHook
 	DEF_FASTCALL(FUNC, CV_OPT, REF_OPT, NOEXCEPT_OPT) \
 	DEF_STDCALL(FUNC, CV_OPT, REF_OPT, NOEXCEPT_OPT) \
 	DEF_VECTORCALL(FUNC, CV_OPT, REF_OPT, NOEXCEPT_OPT)
+#pragma endregion
 
 
+#pragma region base
 class BaseHook
 {
 protected:
@@ -80,8 +88,81 @@ class Hook;
 	};
 DEF_NON_MEMBER(DEF_HOOK, X1, X2, X3)
 #undef DEF_HOOK
+#pragma endregion
 
 
+#pragma region address table hook
+template<class FunctionType>
+class AddressTableHook;
+
+#define DEF_ADDRESS_TABLE_HOOK(CV, X1, X2, X3) \
+	template<class ResultType, class... ArgTypes>															\
+	class AddressTableHook<ResultType CV(ArgTypes...)> : public Hook<ResultType CV(ArgTypes...)>			\
+	{																										\
+	public:																									\
+		using Base = Hook<ResultType CV(ArgTypes...)>; 														\
+		using Base::FunctionType;																			\
+	protected:																								\
+		FunctionType** const pFunction = nullptr;															\
+		FunctionType* const originalFunction = nullptr;														\
+		FunctionType* const hookFunction = nullptr;															\
+																											\
+	public:																									\
+		AddressTableHook(FunctionType** _pFunction, FunctionType* _hookFunction) :							\
+			pFunction(_pFunction),																			\
+			originalFunction(*pFunction),																	\
+			hookFunction(_hookFunction)																		\
+		{																									\
+		}																									\
+																											\
+		AddressTableHook(const AddressTableHook&) = delete;													\
+		virtual ~AddressTableHook() { Base::Disable(); } /* AddressTableHook::DoDisable() */				\
+																											\
+		virtual void DoEnable() { ModifyTable(hookFunction); }												\
+		virtual void DoDisable() { ModifyTable(originalFunction); }											\
+		virtual ResultType CallOriginalFunction(ArgTypes... args) { return originalFunction(args...); }		\
+																											\
+	protected:																								\
+		virtual void ModifyTable(FunctionType* newFunction)													\
+		{																									\
+			DWORD oldProtect = 0, oldProtect2 = 0;															\
+			if (!VirtualProtect(pFunction, sizeof(*pFunction), PAGE_READWRITE, &oldProtect))				\
+				oldProtect = 0;																				\
+			*pFunction = newFunction;																		\
+			VirtualProtect(pFunction, sizeof(*pFunction), oldProtect, &oldProtect2);						\
+		}																									\
+	};
+DEF_NON_MEMBER(DEF_ADDRESS_TABLE_HOOK, X1, X2, X3)
+#undef DEF_ADDRESS_TABLE_HOOK
+#pragma endregion
+
+
+#pragma region IAT hook
+template<class FunctionType>
+class IatHook;
+
+#define DEF_IAT_HOOK(CV, X1, X2, X3) \
+	template<class ResultType, class... ArgTypes>																\
+	class IatHook<ResultType CV(ArgTypes...)> : public AddressTableHook<ResultType CV(ArgTypes...)>				\
+	{																											\
+	public:																										\
+		using Base = AddressTableHook<ResultType CV(ArgTypes...)>; 												\
+		using Base::FunctionType;																				\
+	public:																										\
+		IatHook(HMODULE hookModule, LPCSTR moduleName, LPCSTR functionName, FunctionType* _hookFunction) :		\
+			Base((FunctionType**)FindImportAddress(hookModule, moduleName, functionName), _hookFunction)		\
+		{																										\
+		}																										\
+																												\
+		IatHook(const IatHook&) = delete;																		\
+		virtual ~IatHook() { Base::Disable(); } /* AddressTableHook::DoDisable() */								\
+	};
+DEF_NON_MEMBER(DEF_IAT_HOOK, X1, X2, X3)
+#undef DEF_IAT_HOOK
+#pragma endregion
+
+
+#pragma region inline hook
 #pragma pack(push)
 #pragma pack(1)
 class JmpCode
@@ -111,23 +192,24 @@ class InlineHook;
 	template<class ResultType, class... ArgTypes>														\
 	class InlineHook<ResultType CV(ArgTypes...)> : public Hook<ResultType CV(ArgTypes...)>				\
 	{																									\
+	public:																								\
+		using Base = Hook<ResultType CV(ArgTypes...)>; 													\
+		using Base::FunctionType;																		\
 	private:																							\
 		FunctionType* const originalFunction = nullptr;													\
 		FunctionType* const hookFunction = nullptr;														\
 		const std::array<uint8_t, sizeof(JmpCode)> originalCode;										\
 																										\
 	public:																								\
-		InlineHook(FunctionType* _originalFunction, FunctionType* _hookFunction, bool enable = true) :	\
+		InlineHook(FunctionType* _originalFunction, FunctionType* _hookFunction) :						\
 			originalFunction(_originalFunction),														\
 			hookFunction(_hookFunction)																	\
 		{																								\
 			memcpy((void*)&originalCode, originalFunction, sizeof(originalCode));						\
-																										\
-			if (enable)																					\
-				Enable();																				\
 		}																								\
 																										\
-		virtual ~InlineHook() { Disable(); }															\
+		InlineHook(const InlineHook&) = delete;															\
+		virtual ~InlineHook() { Base::Disable(); } /* InlineHook::DoDisable()	*/						\
 																										\
 		virtual void DoEnable()																			\
 		{																								\
@@ -148,16 +230,18 @@ class InlineHook;
 																										\
 		virtual ResultType CallOriginalFunction(ArgTypes... args)										\
 		{																								\
-			bool originalEnable = IsEnabled();															\
-			Disable();																					\
+			bool originalEnable = Base::IsEnabled();													\
+			Base::Disable();																			\
 			ResultType result = originalFunction(args...);												\
 			if (originalEnable)																			\
-				Enable();																				\
+				Base::Enable();																			\
 			return result;																				\
 		}																								\
 	};
 DEF_NON_MEMBER(DEF_INLINE_HOOK, X1, X2, X3)
 #undef DEF_INLINE_HOOK
+#pragma endregion
+
 
 // Clear defines
 #ifndef MODERN_HOOK_DONT_CLEAR_DEFINES
