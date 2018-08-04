@@ -34,9 +34,9 @@ public:
 		{																									\
 			InlineHook<decltype(Add##CV)> hook(Add##CV, MyAdd##CV);											\
 			hook.Enable();																					\
-			Assert::AreEqual(0, Add##CV(1, 1));																\
+			Assert::AreEqual(0, Add##CV(1, 1), L"Enable failed");											\
 			hook.Disable();																					\
-			Assert::AreEqual(2, Add##CV(1, 1));																\
+			Assert::AreEqual(2, Add##CV(1, 1), L"Disable failed");											\
 		}
 	DEF_NON_MEMBER(DEF_TEST_INLINE_HOOK, X1, X2, X3)
 		
@@ -47,7 +47,7 @@ public:
 				InlineHook<decltype(Add##CV)> hook(Add##CV, MyAdd##CV);										\
 				hook.Enable();																				\
 			}																								\
-			Assert::AreEqual(2, Add##CV(1, 1));																\
+			Assert::AreEqual(2, Add##CV(1, 1), L"Disable failed");											\
 		}
 	DEF_NON_MEMBER(DEF_TEST_INLINE_RAII, X1, X2, X3)
 
@@ -56,7 +56,7 @@ public:
 		{																									\
 			InlineHook<decltype(Add##CV)> hook(Add##CV, MyAdd##CV);											\
 			hook.Enable();																					\
-			Assert::AreEqual(2, hook.CallOriginalFunction(1, 1));											\
+			Assert::AreEqual(2, hook.CallOriginalFunction(1, 1), L"CallOrig failed");						\
 		}
 	DEF_NON_MEMBER(DEF_TEST_INLINE_CALL_ORIG, X1, X2, X3)
 };

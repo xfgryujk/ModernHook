@@ -1,5 +1,4 @@
-﻿#include "stdafx.h"
-#include <string.h>
+﻿#include <string.h>
 
 #include "ModernHook.h"
 
@@ -23,7 +22,7 @@ void BaseHook::Disable()
 }
 
 
-void** FindImportAddress(HANDLE hookModule, LPCSTR moduleName, LPCSTR functionName)
+MODERN_HOOK_API void** FindImportAddress(HANDLE hookModule, LPCSTR moduleName, LPCSTR functionName)
 {
 	auto hookModuleBase = (uintptr_t)hookModule;
 	auto dosHeader = (PIMAGE_DOS_HEADER)hookModuleBase;

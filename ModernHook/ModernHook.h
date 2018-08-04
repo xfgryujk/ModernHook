@@ -1,17 +1,20 @@
 ﻿#pragma once
-
 #include <array>
+#include <functional>
 #include <memory.h>
 
 #include <Windows.h>
 
+#include "detours.h"
+
 namespace ModernHook
 {
 
-// Utils
-
-void** FindImportAddress(HANDLE hookModule, LPCSTR moduleName, LPCSTR functionName);
-
+#ifdef MODERN_HOOK_EXPORTS
+#define MODERN_HOOK_API __declspec(dllexport)
+#else
+#define MODERN_HOOK_API __declspec(dllimport)
+#endif
 
 // Support different calling conventions
 #pragma region calling conventions macros
@@ -56,7 +59,7 @@ void** FindImportAddress(HANDLE hookModule, LPCSTR moduleName, LPCSTR functionNa
 
 
 #pragma region base
-class BaseHook
+class MODERN_HOOK_API BaseHook
 {
 protected:
 	bool isEnabled = false;
@@ -81,9 +84,19 @@ class Hook;
 	{																	\
 	public:																\
 		using FunctionType = ResultType CV(ArgTypes...);				\
+	protected:															\
+		FunctionType* const /*std::function<FunctionType>*/ hookFunction;					\
 																		\
 	public:																\
+		Hook(FunctionType* /*std::function<FunctionType>*/ _hookFunction) :				\
+			hookFunction(std::move(_hookFunction))						\
+		{																\
+		}																\
 		virtual ~Hook() = default;										\
+		virtual ResultType CallHookFunction(ArgTypes&&... args)			\
+		{																\
+			return hookFunction(std::forward<ArgTypes>(args)...);		\
+		}																\
 		virtual ResultType CallOriginalFunction(ArgTypes... args) = 0;	\
 	};
 DEF_NON_MEMBER(DEF_HOOK, X1, X2, X3)
@@ -105,22 +118,24 @@ class AddressTableHook;
 	protected:																								\
 		FunctionType** const pFunction = nullptr;															\
 		FunctionType* const originalFunction = nullptr;														\
-		FunctionType* const hookFunction = nullptr;															\
 																											\
 	public:																									\
 		AddressTableHook(FunctionType** _pFunction, FunctionType* _hookFunction) :							\
+			Base(_hookFunction),																			\
 			pFunction(_pFunction),																			\
-			originalFunction(*pFunction),																	\
-			hookFunction(_hookFunction)																		\
+			originalFunction(*pFunction)																	\
 		{																									\
 		}																									\
 																											\
 		AddressTableHook(const AddressTableHook&) = delete;													\
 		virtual ~AddressTableHook() { Base::Disable(); } /* AddressTableHook::DoDisable() */				\
 																											\
-		virtual void DoEnable() { ModifyTable(hookFunction); }												\
+		virtual void DoEnable() { ModifyTable(Base::hookFunction); }										\
 		virtual void DoDisable() { ModifyTable(originalFunction); }											\
-		virtual ResultType CallOriginalFunction(ArgTypes... args) { return originalFunction(args...); }		\
+		virtual ResultType CallOriginalFunction(ArgTypes&&... args)											\
+		{																									\
+			return originalFunction(std::forward<ArgTypes>(args)...);										\
+		}																									\
 																											\
 	protected:																								\
 		virtual void ModifyTable(FunctionType* newFunction)													\
@@ -140,6 +155,8 @@ DEF_NON_MEMBER(DEF_ADDRESS_TABLE_HOOK, X1, X2, X3)
 #pragma region IAT hook
 template<class FunctionType>
 class IatHook;
+
+MODERN_HOOK_API void** FindImportAddress(HANDLE hookModule, LPCSTR moduleName, LPCSTR functionName);
 
 #define DEF_IAT_HOOK(CV, X1, X2, X3) \
 	template<class ResultType, class... ArgTypes>																\
@@ -165,7 +182,7 @@ DEF_NON_MEMBER(DEF_IAT_HOOK, X1, X2, X3)
 #pragma region inline hook
 #pragma pack(push)
 #pragma pack(1)
-class JmpCode
+class MODERN_HOOK_API JmpCode
 {
 private:
 #ifndef _WIN64 // x86
@@ -197,13 +214,12 @@ class InlineHook;
 		using Base::FunctionType;																		\
 	private:																							\
 		FunctionType* const originalFunction = nullptr;													\
-		FunctionType* const hookFunction = nullptr;														\
 		const std::array<uint8_t, sizeof(JmpCode)> originalCode;										\
 																										\
 	public:																								\
 		InlineHook(FunctionType* _originalFunction, FunctionType* _hookFunction) :						\
-			originalFunction(_originalFunction),														\
-			hookFunction(_hookFunction)																	\
+			Base(_hookFunction),																		\
+			originalFunction(_originalFunction)															\
 		{																								\
 			memcpy((void*)&originalCode, originalFunction, sizeof(originalCode));						\
 		}																								\
@@ -213,7 +229,7 @@ class InlineHook;
 																										\
 		virtual void DoEnable()																			\
 		{																								\
-			JmpCode code((uintptr_t)originalFunction, (uintptr_t)hookFunction);							\
+			JmpCode code((uintptr_t)originalFunction, (uintptr_t)Base::hookFunction);					\
 			DWORD oldProtect, oldProtect2;																\
 			VirtualProtect(originalFunction, sizeof(JmpCode), PAGE_EXECUTE_READWRITE, &oldProtect);		\
 			memcpy(originalFunction, &code, sizeof(JmpCode));											\
