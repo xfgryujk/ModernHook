@@ -1,11 +1,7 @@
 ﻿#pragma once
-#include <array>
 #include <functional>
-#include <memory.h>
 
 #include <Windows.h>
-
-#include "detours.h"
 
 namespace ModernHook
 {
@@ -57,6 +53,18 @@ namespace ModernHook
 	DEF_VECTORCALL(FUNC, CV_OPT, REF_OPT, NOEXCEPT_OPT)
 #pragma endregion
 
+namespace _internal
+{
+
+MODERN_HOOK_API LONG WINAPI DetourTransactionBegin(VOID);
+MODERN_HOOK_API LONG WINAPI DetourTransactionCommit(VOID);
+MODERN_HOOK_API LONG WINAPI DetourUpdateThread(_In_ HANDLE hThread);
+MODERN_HOOK_API LONG WINAPI DetourAttach(_Inout_ PVOID *ppPointer, _In_ PVOID pDetour);
+MODERN_HOOK_API LONG WINAPI DetourDetach(_Inout_ PVOID *ppPointer, _In_ PVOID pDetour);
+
+MODERN_HOOK_API void** FindImportAddress(HMODULE hookModule, LPCSTR moduleName, LPCSTR functionName);
+
+}
 
 #pragma region base
 class MODERN_HOOK_API BaseHook
@@ -156,8 +164,6 @@ DEF_NON_MEMBER(DEF_ADDRESS_TABLE_HOOK, X1, X2, X3)
 template<class FunctionType>
 class IatHook;
 
-MODERN_HOOK_API void** FindImportAddress(HANDLE hookModule, LPCSTR moduleName, LPCSTR functionName);
-
 #define DEF_IAT_HOOK(CV, X1, X2, X3) \
 	template<class ResultType, class... ArgTypes>																\
 	class IatHook<ResultType CV(ArgTypes...)> : public AddressTableHook<ResultType CV(ArgTypes...)>				\
@@ -167,7 +173,8 @@ MODERN_HOOK_API void** FindImportAddress(HANDLE hookModule, LPCSTR moduleName, L
 		using Base::FunctionType;																				\
 	public:																										\
 		IatHook(HMODULE hookModule, LPCSTR moduleName, LPCSTR functionName, FunctionType* _hookFunction) :		\
-			Base((FunctionType**)FindImportAddress(hookModule, moduleName, functionName), _hookFunction)		\
+			Base((FunctionType**)_internal::FindImportAddress(hookModule, moduleName, functionName),			\
+				 _hookFunction)																					\
 		{																										\
 		}																										\
 																												\
@@ -180,79 +187,49 @@ DEF_NON_MEMBER(DEF_IAT_HOOK, X1, X2, X3)
 
 
 #pragma region inline hook
-#pragma pack(push)
-#pragma pack(1)
-class MODERN_HOOK_API JmpCode
-{
-private:
-#ifndef _WIN64 // x86
-	// jmp XXXXXXXX
-	const uint8_t code = 0xE9;
-	uintptr_t relativeAddress = 0;
-#else // x64
-	// jmp [RIP]
-	const std::array<uint8_t, 6> code = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
-	uintptr_t address = 0;
-#endif
-
-public:
-	JmpCode() = default;
-	JmpCode(uintptr_t srcAddr, uintptr_t dstAddr);
-	void SetAddress(uintptr_t srcAddr, uintptr_t dstAddr);
-};
-#pragma pack(pop)
-
 template<class FunctionType>
 class InlineHook;
 
 #define DEF_INLINE_HOOK(CV, X1, X2, X3) \
-	template<class ResultType, class... ArgTypes>														\
-	class InlineHook<ResultType CV(ArgTypes...)> : public Hook<ResultType CV(ArgTypes...)>				\
-	{																									\
-	public:																								\
-		using Base = Hook<ResultType CV(ArgTypes...)>; 													\
-		using Base::FunctionType;																		\
-	private:																							\
-		FunctionType* const originalFunction = nullptr;													\
-		const std::array<uint8_t, sizeof(JmpCode)> originalCode;										\
-																										\
-	public:																								\
-		InlineHook(FunctionType* _originalFunction, FunctionType* _hookFunction) :						\
-			Base(_hookFunction),																		\
-			originalFunction(_originalFunction)															\
-		{																								\
-			memcpy((void*)&originalCode, originalFunction, sizeof(originalCode));						\
-		}																								\
-																										\
-		InlineHook(const InlineHook&) = delete;															\
-		virtual ~InlineHook() { Base::Disable(); } /* InlineHook::DoDisable()	*/						\
-																										\
-		virtual void DoEnable()																			\
-		{																								\
-			JmpCode code((uintptr_t)originalFunction, (uintptr_t)Base::hookFunction);					\
-			DWORD oldProtect, oldProtect2;																\
-			VirtualProtect(originalFunction, sizeof(JmpCode), PAGE_EXECUTE_READWRITE, &oldProtect);		\
-			memcpy(originalFunction, &code, sizeof(JmpCode));											\
-			VirtualProtect(originalFunction, sizeof(JmpCode), oldProtect, &oldProtect2);				\
-		}																								\
-																										\
-		virtual void DoDisable()																		\
-		{																								\
-			DWORD oldProtect, oldProtect2;																\
-			VirtualProtect(originalFunction, sizeof(JmpCode), PAGE_EXECUTE_READWRITE, &oldProtect);		\
-			memcpy(originalFunction, &originalCode, sizeof(originalCode));								\
-			VirtualProtect(originalFunction, sizeof(JmpCode), oldProtect, &oldProtect2);				\
-		}																								\
-																										\
-		virtual ResultType CallOriginalFunction(ArgTypes... args)										\
-		{																								\
-			bool originalEnable = Base::IsEnabled();													\
-			Base::Disable();																			\
-			ResultType result = originalFunction(args...);												\
-			if (originalEnable)																			\
-				Base::Enable();																			\
-			return result;																				\
-		}																								\
+	template<class ResultType, class... ArgTypes>												\
+	class InlineHook<ResultType CV(ArgTypes...)> : public Hook<ResultType CV(ArgTypes...)>		\
+	{																							\
+	public:																						\
+		using Base = Hook<ResultType CV(ArgTypes...)>; 											\
+		using Base::FunctionType;																\
+	protected:																					\
+		FunctionType* originalFunction = nullptr;												\
+																								\
+	public:																						\
+		InlineHook(FunctionType* _originalFunction, FunctionType* _hookFunction) :				\
+			Base(_hookFunction),																\
+			originalFunction(_originalFunction)													\
+		{																						\
+		}																						\
+																								\
+		InlineHook(const InlineHook&) = delete;													\
+		virtual ~InlineHook() { Base::Disable(); } /* InlineHook::DoDisable()	*/				\
+																								\
+		virtual void DoEnable()																	\
+		{																						\
+			_internal::DetourTransactionBegin();												\
+			_internal::DetourUpdateThread(GetCurrentThread());									\
+			_internal::DetourAttach((void**)&originalFunction, hookFunction);					\
+			_internal::DetourTransactionCommit();												\
+		}																						\
+																								\
+		virtual void DoDisable()																\
+		{																						\
+			_internal::DetourTransactionBegin();												\
+			_internal::DetourUpdateThread(GetCurrentThread());									\
+			_internal::DetourDetach((void**)&originalFunction, hookFunction);					\
+			_internal::DetourTransactionCommit();												\
+		}																						\
+																								\
+		virtual ResultType CallOriginalFunction(ArgTypes... args)								\
+		{																						\
+			return originalFunction(std::forward<ArgTypes>(args)...);							\
+		}																						\
 	};
 DEF_NON_MEMBER(DEF_INLINE_HOOK, X1, X2, X3)
 #undef DEF_INLINE_HOOK

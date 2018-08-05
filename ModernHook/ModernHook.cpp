@@ -1,9 +1,60 @@
 ﻿#include <string.h>
 
+#include "detours.h"
 #include "ModernHook.h"
+
+using namespace std;
 
 namespace ModernHook
 {
+
+namespace _internal
+{
+
+MODERN_HOOK_API LONG WINAPI DetourTransactionBegin(VOID) { return ::DetourTransactionBegin(); }
+MODERN_HOOK_API LONG WINAPI DetourTransactionCommit(VOID) { return ::DetourTransactionCommit(); }
+MODERN_HOOK_API LONG WINAPI DetourUpdateThread(_In_ HANDLE hThread) { return ::DetourUpdateThread(hThread); }
+MODERN_HOOK_API LONG WINAPI DetourAttach(_Inout_ PVOID *ppPointer, _In_ PVOID pDetour) { return ::DetourAttach(ppPointer, pDetour); }
+MODERN_HOOK_API LONG WINAPI DetourDetach(_Inout_ PVOID *ppPointer, _In_ PVOID pDetour) { return ::DetourDetach(ppPointer, pDetour); }
+
+MODERN_HOOK_API void** FindImportAddress(HMODULE hookModule, LPCSTR moduleName, LPCSTR functionName)
+{
+	struct Context
+	{
+		LPCSTR moduleName;
+		LPCSTR functionName;
+		bool isExpectedModule;
+		void** importAddress;
+	} ctx = { moduleName, functionName, false, nullptr };
+
+	DetourEnumerateImportsEx(hookModule, &ctx,
+		[](void* context, HMODULE module, LPCSTR moduleName)
+		{
+			auto ctx = (Context*)context;
+			if (ctx->importAddress != nullptr)
+				return FALSE;
+			ctx->isExpectedModule = ctx->moduleName != NULL && moduleName != NULL &&
+				_stricmp(ctx->moduleName, moduleName) == 0;
+			return TRUE;
+		},
+		[](void* context, DWORD ordinal, LPCSTR functionName, void** importAddress)
+		{
+			auto ctx = (Context*)context;
+			if (!ctx->isExpectedModule)
+				return FALSE;
+			if (ctx->functionName != NULL && functionName != NULL &&
+				_stricmp(ctx->functionName, functionName) == 0)
+			{
+				ctx->importAddress = importAddress;
+				return FALSE;
+			}
+			return TRUE;
+		}
+	);
+	return ctx.importAddress;
+}
+
+}
 
 void BaseHook::Enable()
 {
@@ -20,58 +71,5 @@ void BaseHook::Disable()
 	DoDisable();
 	SetIsEnabled(false);
 }
-
-
-MODERN_HOOK_API void** FindImportAddress(HANDLE hookModule, LPCSTR moduleName, LPCSTR functionName)
-{
-	auto hookModuleBase = (uintptr_t)hookModule;
-	auto dosHeader = (PIMAGE_DOS_HEADER)hookModuleBase;
-	auto ntHeader = PIMAGE_NT_HEADERS(hookModuleBase + dosHeader->e_lfanew);
-
-	auto importTable = PIMAGE_IMPORT_DESCRIPTOR(hookModuleBase
-		+ ntHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
-	for (; importTable->Characteristics != 0; importTable++)
-	{
-		if (_stricmp(LPCSTR(hookModuleBase + importTable->Name), moduleName) != 0)
-			continue;
-
-		auto info = PIMAGE_THUNK_DATA(hookModuleBase + importTable->OriginalFirstThunk);
-		auto importAddress = (void**)(hookModuleBase + importTable->FirstThunk);
-		for (; info->u1.AddressOfData != 0; info++, importAddress++)
-		{
-			if ((info->u1.Ordinal & IMAGE_ORDINAL_FLAG) == 0)
-			{
-				auto name = PIMAGE_IMPORT_BY_NAME(hookModuleBase + info->u1.AddressOfData);
-				if (strcmp((LPCSTR)name->Name, functionName) == 0)
-					return importAddress;
-			}
-		}
-		return nullptr;
-	}
-	return nullptr;
-}
-
-
-#ifndef _WIN64 // x86
-JmpCode::JmpCode(uintptr_t srcAddr, uintptr_t dstAddr)
-{
-	SetAddress(srcAddr, dstAddr);
-}
-
-void JmpCode::SetAddress(uintptr_t srcAddr, uintptr_t dstAddr)
-{
-	relativeAddress = dstAddr - srcAddr - sizeof(JmpCode);
-}
-#else // x64
-JmpCode::JmpCode(uintptr_t srcAddr, uintptr_t dstAddr)
-{
-	SetAddress(srcAddr, dstAddr);
-}
-
-void JmpCode::SetAddress(uintptr_t srcAddr, uintptr_t dstAddr)
-{
-	address = dstAddr;
-}
-#endif
 
 }
