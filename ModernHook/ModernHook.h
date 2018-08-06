@@ -102,7 +102,7 @@ class Hook;
 		using MyType = Hook<ResultType(ArgTypes...)>;											   \
 		using FunctionType = ResultType CV(ArgTypes...);										   \
 	protected:																					   \
-		const std::function<FunctionType> hookFunction;											   \
+		std::function<FunctionType> hookFunction;												   \
 		const _internal::VirtualAllocPtr hookFunctionEntry = CreateHookFunctionEntry();			   \
 																								   \
 	public:																						   \
@@ -111,6 +111,10 @@ class Hook;
 		{																						   \
 		}																						   \
 		virtual ~Hook() = default;																   \
+		virtual void SetHookFunction(std::function<FunctionType> _hookFunction)					   \
+		{																						   \
+			hookFunction = std::move(_hookFunction);											   \
+		}																						   \
 		virtual ResultType CallHookFunction(ArgTypes... args)									   \
 		{																						   \
 			return hookFunction(args...);														   \
@@ -153,7 +157,7 @@ class AddressTableHook;
 		FunctionType* const originalFunction = nullptr;														\
 																											\
 	public:																									\
-		AddressTableHook(FunctionType** _pFunction, std::function<FunctionType> _hookFunction) :			\
+		AddressTableHook(FunctionType** _pFunction, std::function<FunctionType> _hookFunction = nullptr) :	\
 			Base(_hookFunction),																			\
 			pFunction(_pFunction),																			\
 			originalFunction(*pFunction)																	\
@@ -190,20 +194,22 @@ template<class FunctionType>
 class IatHook;
 
 #define DEF_IAT_HOOK(CV, X1, X2, X3) \
-	template<class ResultType, class... ArgTypes>																		   \
-	class IatHook<ResultType CV(ArgTypes...)> : public AddressTableHook<ResultType CV(ArgTypes...)>						   \
-	{																													   \
-	public:																												   \
-		using Base = AddressTableHook<ResultType CV(ArgTypes...)>;														   \
-		using Base::FunctionType;																						   \
-	public:																												   \
-		IatHook(HMODULE hookModule, LPCSTR moduleName, LPCSTR functionName, std::function<FunctionType> _hookFunction) :   \
-			Base((FunctionType**)_internal::FindImportAddress(hookModule, moduleName, functionName), _hookFunction)		   \
-		{																												   \
-		}																												   \
-																														   \
-		IatHook(const IatHook&) = delete;																				   \
-		virtual ~IatHook() { Base::Disable(); } /* AddressTableHook::DoDisable() */										   \
+	template<class ResultType, class... ArgTypes>														   \
+	class IatHook<ResultType CV(ArgTypes...)> : public AddressTableHook<ResultType CV(ArgTypes...)>		   \
+	{																									   \
+	public:																								   \
+		using Base = AddressTableHook<ResultType CV(ArgTypes...)>;										   \
+		using Base::FunctionType;																		   \
+	public:																								   \
+		IatHook(HMODULE hookModule, LPCSTR moduleName, LPCSTR functionName,								   \
+				std::function<FunctionType> _hookFunction = nullptr) :									   \
+			Base((FunctionType**)_internal::FindImportAddress(hookModule, moduleName, functionName),	   \
+				_hookFunction)																			   \
+		{																								   \
+		}																								   \
+																										   \
+		IatHook(const IatHook&) = delete;																   \
+		virtual ~IatHook() { Base::Disable(); } /* AddressTableHook::DoDisable() */						   \
 	};
 DEF_NON_MEMBER(DEF_IAT_HOOK, X1, X2, X3)
 #undef DEF_IAT_HOOK
@@ -215,45 +221,45 @@ template<class FunctionType>
 class InlineHook;
 
 #define DEF_INLINE_HOOK(CV, X1, X2, X3) \
-	template<class ResultType, class... ArgTypes>													\
-	class InlineHook<ResultType CV(ArgTypes...)> : public Hook<ResultType CV(ArgTypes...)>			\
-	{																								\
-	public:																							\
-		using Base = Hook<ResultType CV(ArgTypes...)>; 												\
-		using Base::FunctionType;																	\
-	protected:																						\
-		FunctionType* originalFunction = nullptr;													\
-																									\
-	public:																							\
-		InlineHook(FunctionType* _originalFunction, std::function<FunctionType> _hookFunction) :	\
-			Base(_hookFunction),																	\
-			originalFunction(_originalFunction)														\
-		{																							\
-		}																							\
-																									\
-		InlineHook(const InlineHook&) = delete;														\
-		virtual ~InlineHook() { Base::Disable(); } /* InlineHook::DoDisable()	*/					\
-																									\
-		virtual void DoEnable()																		\
-		{																							\
-			_internal::DetourTransactionBegin();													\
-			_internal::DetourUpdateThread(GetCurrentThread());										\
-			_internal::DetourAttach((void**)&originalFunction, hookFunctionEntry.get());			\
-			_internal::DetourTransactionCommit();													\
-		}																							\
-																									\
-		virtual void DoDisable()																	\
-		{																							\
-			_internal::DetourTransactionBegin();													\
-			_internal::DetourUpdateThread(GetCurrentThread());										\
-			_internal::DetourDetach((void**)&originalFunction, hookFunctionEntry.get());			\
-			_internal::DetourTransactionCommit();													\
-		}																							\
-																									\
-		virtual ResultType CallOriginalFunction(ArgTypes... args)									\
-		{																							\
-			return originalFunction(args...);														\
-		}																							\
+	template<class ResultType, class... ArgTypes>															\
+	class InlineHook<ResultType CV(ArgTypes...)> : public Hook<ResultType CV(ArgTypes...)>					\
+	{																										\
+	public:																									\
+		using Base = Hook<ResultType CV(ArgTypes...)>; 														\
+		using Base::FunctionType;																			\
+	protected:																								\
+		FunctionType* originalFunction = nullptr;															\
+																											\
+	public:																									\
+		InlineHook(FunctionType* _originalFunction, std::function<FunctionType> _hookFunction = nullptr) :	\
+			Base(_hookFunction),																			\
+			originalFunction(_originalFunction)																\
+		{																									\
+		}																									\
+																											\
+		InlineHook(const InlineHook&) = delete;																\
+		virtual ~InlineHook() { Base::Disable(); } /* InlineHook::DoDisable()	*/							\
+																											\
+		virtual void DoEnable()																				\
+		{																									\
+			_internal::DetourTransactionBegin();															\
+			_internal::DetourUpdateThread(GetCurrentThread());												\
+			_internal::DetourAttach((void**)&originalFunction, Base::hookFunctionEntry.get());				\
+			_internal::DetourTransactionCommit();															\
+		}																									\
+																											\
+		virtual void DoDisable()																			\
+		{																									\
+			_internal::DetourTransactionBegin();															\
+			_internal::DetourUpdateThread(GetCurrentThread());												\
+			_internal::DetourDetach((void**)&originalFunction, Base::hookFunctionEntry.get());				\
+			_internal::DetourTransactionCommit();															\
+		}																									\
+																											\
+		virtual ResultType CallOriginalFunction(ArgTypes... args)											\
+		{																									\
+			return originalFunction(args...);																\
+		}																									\
 	};
 DEF_NON_MEMBER(DEF_INLINE_HOOK, X1, X2, X3)
 #undef DEF_INLINE_HOOK
